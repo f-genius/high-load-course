@@ -1,60 +1,58 @@
 package ru.quipy.payments.logic
 
-
-import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import ru.quipy.common.utils.SlidingWindowRateLimiterv2
-import ru.quipy.core.EventSourcingService
-import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.common.utils.LeakingBucketRateLimiter
+import ru.quipy.common.utils.NamedThreadFactory
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 
 @Service
 class PaymentSystemImpl(
-    private val paymentAccounts: List<PaymentExternalSystemAdapter>,
-    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
+    private val paymentAccounts: List<PaymentExternalSystemAdapter>
 ) : PaymentService {
     companion object {
         val logger = LoggerFactory.getLogger(PaymentSystemImpl::class.java)
     }
 
-    val rateLimiterMap = paymentAccounts.associate {
-        it.name() to SlidingWindowRateLimiterv2(
-            rate = 1,
-            window = Duration.ofMillis(600)
-        )
-    }
+    private val accountExecutors: Map<String, ThreadPoolExecutor> = paymentAccounts
+        .associate {
+            it.name() to ThreadPoolExecutor(
+                it.parallelRequests(),
+                it.parallelRequests(),
+                1L,
+                TimeUnit.SECONDS,
+                LinkedBlockingQueue(),
+                NamedThreadFactory("payment-submission-executor-${it.name()}")
+            )
+        }
 
-    val semaphoresMap = paymentAccounts.associate {
-        it.name() to Semaphore(it.parallelRequests())
-    }
+    private val rateLimiters: Map<String, LeakingBucketRateLimiter> = paymentAccounts
+        .associate {
+            it.name() to LeakingBucketRateLimiter(
+                rate = it.rateLimit().toLong(),
+                window = Duration.ofSeconds(1L),
+                bucketSize = it.rateLimit()
+            )
+        }
 
     override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         for (account in paymentAccounts) {
-            val rateLimiter = rateLimiterMap[account.name()]!!
-            val semaphore = semaphoresMap[account.name()]!!
+            val rateLimiter = rateLimiters[account.name()]!!
 
-            runBlocking {
-                semaphore.withPermit {
-                    if (account.isDeadlineExceeded(deadline)) {
-                        account.failPayment(paymentId)
-                        throw IllegalStateException()
-                    }
-                    while (!rateLimiter.tick()) {
-                        delay(10)
-                    }
-                    if (account.isDeadlineExceeded(deadline)) {
-                        account.failPayment(paymentId)
-                        throw IllegalStateException()
-                    }
-                    account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
+            CoroutineScope(Dispatchers.Default).launch {
+                while (!rateLimiter.tick()) {
+                    delay(5)
                 }
+                account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
             }
         }
     }

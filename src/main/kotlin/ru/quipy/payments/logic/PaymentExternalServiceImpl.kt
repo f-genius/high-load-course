@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.LeakingBucketRateLimiter
+import ru.quipy.common.utils.RateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
@@ -31,6 +32,7 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
+    private val semaphore = Semaphore(properties.parallelRequests)
 
     private val client = OkHttpClient.Builder().build()
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -49,6 +51,8 @@ class PaymentExternalSystemAdapterImpl(
             url("http://localhost:1234/external/process?serviceName=${serviceName}&accountName=${accountName}&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
             post(emptyBody)
         }.build()
+
+        semaphore.acquire()
 
         try {
             client.newCall(request).execute().use { response ->
@@ -83,6 +87,9 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
+        }
+        finally {
+            semaphore.release()
         }
     }
 
