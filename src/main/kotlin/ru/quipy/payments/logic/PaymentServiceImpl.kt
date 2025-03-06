@@ -4,6 +4,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
+import ru.quipy.common.utils.RateLimiter
+import ru.quipy.common.utils.SlidingWindowRateLimiterv2
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
@@ -31,12 +33,11 @@ class PaymentSystemImpl(
             )
         }
 
-    private val rateLimiters: Map<String, LeakingBucketRateLimiter> = paymentAccounts
+    private val rateLimiters: Map<String, RateLimiter> = paymentAccounts
         .associate {
-            it.name() to LeakingBucketRateLimiter(
+            it.name() to SlidingWindowRateLimiterv2(
                 rate = it.rateLimit().toLong(),
-                window = Duration.ofSeconds(1L),
-                bucketSize = it.rateLimit()
+                window = Duration.ofMillis(1000L)
             )
         }
 
