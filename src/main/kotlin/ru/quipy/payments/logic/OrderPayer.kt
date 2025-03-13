@@ -15,7 +15,7 @@ class OrderPayer(
 
     val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         val createdEvent = paymentESService.create {
             it.create(
