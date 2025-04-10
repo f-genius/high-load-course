@@ -1,5 +1,9 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.LeakingBucketRateLimiter
@@ -44,9 +48,9 @@ class PaymentSystemImpl(
         for (account in paymentAccounts) {
             val rateLimiter = rateLimiters[account.name()]!!
 
-            accountExecutors[account.name()]?.submit {
+            CoroutineScope(Dispatchers.Default).launch {
                 while (!rateLimiter.tick()) {
-                    Thread.sleep(5)
+                    delay(5)
                 }
                 account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
             }
